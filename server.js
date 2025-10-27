@@ -6,42 +6,55 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
+// Middleware - Fixed CORS configuration
 app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) === -1) { 
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
-  },
+  origin: [
+    "http://localhost:3000",
+    "https://jerdonphilip.github.io",
+    "https://jerdonphilip.github.io/app-weather"
+  ],
   credentials: true
 }));
+
 app.use(express.json());
 
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
 // Forecast endpoint - handles both city names and coordinates
-app.get('/api/forecast', (req, res) => {
-  const { city, days = 3, lat, lon } = req.query;
-  
-  if (!city && !(lat && lon)) {
-    return res.status(400).json({ error: 'Either city name or coordinates (lat, lon) are required' });
-  }
+app.get('/api/forecast', async (req, res) => {
+  try {
+    const { city, days = 3, lat, lon } = req.query;
+    
+    // Validate API key
+    if (!process.env.WEATHER_API_KEY) {
+      console.error('WEATHER_API_KEY is missing from environment variables');
+      return res.status(500).json({ error: 'Server configuration error' });
+    }
+    
+    if (!city && !(lat && lon)) {
+      return res.status(400).json({ 
+        error: 'Either city name or coordinates (lat, lon) are required' 
+      });
+    }
 
-  // Build the query parameter - either city name or coordinates
-  let queryParam;
-  if (city) {
-    queryParam = city;
-  } else {
-    queryParam = `${lat},${lon}`;
-  }
+    // Build the query parameter - either city name or coordinates
+    let queryParam;
+    if (city) {
+      queryParam = encodeURIComponent(city);
+    } else {
+      queryParam = `${lat},${lon}`;
+    }
 
-  axios.get(
-    `http://api.weatherapi.com/v1/forecast.json?key=${process.env.WEATHER_API_KEY}&q=${queryParam}&days=${days}&aqi=no`
-  )
-  .then(response => {
+    console.log(`Fetching forecast for: ${queryParam}, days: ${days}`);
+
+    const response = await axios.get(
+      `http://api.weatherapi.com/v1/forecast.json?key=${process.env.WEATHER_API_KEY}&q=${queryParam}&days=${days}&aqi=no`
+    );
+
     // Current weather data
     const currentData = {
       location: response.data.location.name,
@@ -75,8 +88,8 @@ app.get('/api/forecast', (req, res) => {
     };
 
     res.json(forecastResponse);
-  })
-  .catch(error => {
+    
+  } catch (error) {
     console.error('Forecast API Error:', error.response?.data || error.message);
     
     if (error.response?.status === 400) {
@@ -85,16 +98,29 @@ app.get('/api/forecast', (req, res) => {
     if (error.response?.status === 401) {
       return res.status(500).json({ error: 'Invalid API key' });
     }
+    if (error.response?.status === 403) {
+      return res.status(500).json({ error: 'API key unauthorized or exceeded quota' });
+    }
     
-    res.status(500).json({ error: 'Failed to fetch forecast data' });
-  });
+    res.status(500).json({ 
+      error: 'Failed to fetch forecast data',
+      details: error.message 
+    });
+  }
 });
 
-// Health check endpoint
+// Health check endpoint with API key verification
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'Server is running' });
+  const healthStatus = {
+    status: 'Server is running',
+    port: PORT,
+    apiKeyConfigured: !!process.env.WEATHER_API_KEY,
+    timestamp: new Date().toISOString()
+  };
+  res.json(healthStatus);
 });
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`CORS enabled for: localhost:3000, jerdonphilip.github.io`);
 });
